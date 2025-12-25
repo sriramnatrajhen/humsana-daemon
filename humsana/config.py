@@ -86,7 +86,18 @@ def load_config() -> HumsanaConfig:
             data = yaml.safe_load(f) or {}
         
         return HumsanaConfig(
-            dangerous_commands=data.get('dangerous_commands', HumsanaConfig.dangerous_commands),
+            dangerous_commands=data.get('dangerous_commands', [
+                "rm -rf",
+                "DROP DATABASE",
+                "DROP TABLE",
+                "DELETE FROM",
+                "git push --force",
+                "git push -f",
+                "kubectl delete",
+                "terraform destroy",
+                "docker system prune",
+                "sudo rm",
+            ]),
             stress_threshold=data.get('stress_threshold', 0.7),
             focus_threshold=data.get('focus_threshold', 0.6),
             analysis_interval=data.get('analysis_interval', 5.0),

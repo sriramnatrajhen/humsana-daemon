@@ -1,4 +1,4 @@
-Metadata-Version: 2.4
+Metadata-Version: 2.1
 Name: humsana-daemon
 Version: 1.0.0
 Summary: AI that reads the room - stress and focus detection for Claude
@@ -23,24 +23,7 @@ Classifier: Programming Language :: Python :: 3.12
 Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Requires-Python: >=3.9
 Description-Content-Type: text/markdown
-Requires-Dist: pynput>=1.7.6
-Requires-Dist: PyYAML>=6.0
-Requires-Dist: requests>=2.28.0
 Provides-Extra: dev
-Requires-Dist: pytest>=7.0; extra == "dev"
-Requires-Dist: pytest-cov>=4.0; extra == "dev"
-Dynamic: author
-Dynamic: author-email
-Dynamic: classifier
-Dynamic: description
-Dynamic: description-content-type
-Dynamic: home-page
-Dynamic: keywords
-Dynamic: project-url
-Dynamic: provides-extra
-Dynamic: requires-dist
-Dynamic: requires-python
-Dynamic: summary
 
 # Humsana Daemon
 
@@ -218,7 +201,6 @@ PRs welcome! Especially for:
 
 ## 📧 Support
 
-- **Issues**: [GitHub Issues](https://github.com/humsana/humsana-daemon/issues)
 - **Email**: contact@humsana.com
 
 ---

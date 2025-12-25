@@ -34,11 +34,55 @@ All data stays in `~/.humsana/signals.db` on your machine.
 
 **Audit the code yourself:** See `humsana/collector.py` lines 65-95 for the exact privacy implementation.
 
+## 🔐 Why Accessibility Permissions?
+
+macOS requires Accessibility permission for any app that monitors keyboard input — even if we only measure *timing* and never capture actual keys.
+
+**This feels scary. Here's why it's safe:**
+
+1. **We're open source.** Every line of code is auditable. We can't hide anything.
+
+2. **We never see your keystrokes.** Look at `humsana/collector.py` lines 65-95:
+   ```python
+   # We check the key to categorize, then discard it
+   is_backspace = (key == keyboard.Key.backspace)
+   
+   # Create privacy-safe signal
+   # NOTE: 'key' is NOT stored in SignalSnapshot
+   signal = SignalSnapshot(
+       timestamp=now,
+       interval_ms=interval_ms,  # Only timing!
+       is_backspace=is_backspace,
+       is_modifier=is_modifier
+   )
+   ```
+
+3. **Data never leaves your machine.** Check `humsana/local_db.py` — it's pure SQLite at `~/.humsana/signals.db`. No network calls in the free tier.
+
+4. **You can verify network activity:**
+   ```bash
+   # Watch for any network connections (there should be none)
+   sudo lsof -i -n -P | grep humsana
+   ```
+
+**If you're still uncomfortable:** Run the daemon in a VM or container, or audit every line before installing. We built this because we'd want to use it ourselves.
+
 ## 📦 Installation
 
 ```bash
 pip install humsana-daemon
 ```
+
+### macOS Accessibility Setup
+
+After installing, macOS will require Accessibility permissions:
+
+1. Run `humsana start`
+2. You'll see: "This process is not trusted!"
+3. Go to **System Preferences → Security & Privacy → Privacy → Accessibility**
+4. Click the 🔒 lock and add your Terminal app
+5. **Restart Terminal completely** (Cmd+Q, not just close window)
+6. Run `humsana start` again
 
 ## 🚀 Quick Start
 
@@ -46,7 +90,7 @@ pip install humsana-daemon
 # Start the daemon
 humsana start
 
-# Check your current state
+# Check your current state (in another terminal)
 humsana status
 
 # View/edit config
@@ -134,12 +178,18 @@ Then write your own script to handle these events.
 
 ## 🐛 Troubleshooting
 
-### "Permission denied" on macOS
+### "Permission denied" or "not trusted" on macOS
 
-macOS requires accessibility permissions for keyboard monitoring:
+macOS requires Accessibility permissions for keyboard monitoring:
 
-1. Go to System Preferences → Security & Privacy → Privacy → Accessibility
-2. Add your terminal app (Terminal, iTerm2, etc.)
+1. Go to **System Preferences → Security & Privacy → Privacy → Accessibility**
+2. Click the 🔒 lock to make changes
+3. Click **+** and add your terminal app:
+   - `/Applications/Utilities/Terminal.app` (default Terminal)
+   - `/Applications/iTerm.app` (if using iTerm2)
+   - `/Applications/Visual Studio Code.app` (if running from VS Code terminal)
+4. **Restart your terminal completely** (Cmd+Q)
+5. Run `humsana start` again
 
 ### Daemon not detecting keystrokes
 
@@ -147,7 +197,7 @@ macOS requires accessibility permissions for keyboard monitoring:
 # Check if daemon is running
 humsana status
 
-# Restart
+# If no recent data, restart
 humsana start
 ```
 
@@ -159,6 +209,13 @@ The daemon should use <1% CPU. If higher:
 # Check analysis interval in config
 humsana config
 # Increase analysis_interval to 10.0 or higher
+```
+
+### Verify no network activity
+
+```bash
+# This should return nothing (no connections)
+sudo lsof -i -n -P | grep -i humsana
 ```
 
 ## 📜 License
@@ -174,7 +231,8 @@ PRs welcome! Especially for:
 
 ## 📧 Support
 
-- **Email**: contact@humsana.com
+- **Issues**: [GitHub Issues](https://github.com/sriramnatrajhen/humsana-daemon/issues)
+- **Email**: hello@humsana.com
 
 ---
 

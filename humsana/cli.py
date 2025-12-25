@@ -125,7 +125,7 @@ class HumsanaDaemon:
         print(f"⚙️ Config: {get_config_path()}")
         print("")
         print("🔒 Privacy mode: ONLY timing data collected")
-        print("📖 Audit the code: https://github.com/humsana/humsana-daemon")
+        print("📖 Audit the code: https://github.com/sriramnatrajhen/humsana-daemon")
         print("")
         print("Press Ctrl+C to stop")
         print("-" * 60)
@@ -286,7 +286,7 @@ Privacy:
   🔒 We NEVER capture what you type
   🔒 All data stays local in ~/.humsana/
   
-More info: https://github.com/humsana/humsana-daemon
+More info: https://github.com/sriramnatrajhen/humsana-daemon")
         """
     )
     
