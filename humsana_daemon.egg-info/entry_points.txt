@@ -1,0 +1,2 @@
+[console_scripts]
+humsana = humsana.cli:main

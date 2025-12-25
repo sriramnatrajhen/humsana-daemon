@@ -1,0 +1,13 @@
+setup.py
+humsana/__init__.py
+humsana/analyzer.py
+humsana/cli.py
+humsana/collector.py
+humsana/config.py
+humsana/local_db.py
+humsana_daemon.egg-info/PKG-INFO
+humsana_daemon.egg-info/SOURCES.txt
+humsana_daemon.egg-info/dependency_links.txt
+humsana_daemon.egg-info/entry_points.txt
+humsana_daemon.egg-info/requires.txt
+humsana_daemon.egg-info/top_level.txt
