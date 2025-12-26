@@ -1,72 +1,93 @@
 """
-Humsana Daemon - Configuration
-Loads user configuration from ~/.humsana/config.yaml
+Humsana - Configuration Management
+Handles ~/.humsana/config.yaml with defaults.
 """
 
-import os
-from pathlib import Path
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass, field
 import yaml
+from pathlib import Path
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any
 
 
 def get_config_path() -> Path:
-    """Get the path to the config file."""
-    return Path.home() / ".humsana" / "config.yaml"
+    """Get path to config file."""
+    humsana_dir = Path.home() / ".humsana"
+    humsana_dir.mkdir(exist_ok=True)
+    return humsana_dir / "config.yaml"
 
 
-def get_default_config_path() -> Path:
-    """Get the path to the default config template."""
-    return Path(__file__).parent / "config.example.yaml"
+# Default dangerous commands that trigger interlock
+DEFAULT_DANGEROUS_COMMANDS = [
+    "rm -rf",
+    "DROP DATABASE",
+    "DROP TABLE",
+    "DELETE FROM",
+    "git push --force",
+    "git push -f",
+    "kubectl delete",
+    "terraform destroy",
+    "docker system prune",
+    "sudo rm",
+    "dd if=",
+    "mkfs",
+    "> /dev/sd",
+]
 
 
 @dataclass
 class HumsanaConfig:
-    """Configuration for the Humsana daemon."""
+    """Configuration settings for Humsana."""
     
-    # Dangerous commands that trigger warnings when stressed
-    dangerous_commands: List[str] = field(default_factory=lambda: [
-        "rm -rf",
-        "DROP DATABASE",
-        "DROP TABLE",
-        "DELETE FROM",
-        "git push --force",
-        "git push -f",
-        "kubectl delete",
-        "terraform destroy",
-        "docker system prune",
-        "sudo rm",
-        "format c:",
-        "mkfs",
-    ])
+    # === INTERLOCK SETTINGS (Day 3) ===
     
-    # Stress threshold (0.0 to 1.0) for triggering warnings
+    # Execution mode: 'dry_run' (default, simulates) or 'live' (actually executes)
+    execution_mode: str = 'dry_run'
+    
+    # Fatigue threshold (0-100). Above this, dangerous commands are blocked.
+    fatigue_threshold: int = 70
+    
+    # Built-in dangerous command patterns
+    dangerous_commands: List[str] = field(default_factory=lambda: DEFAULT_DANGEROUS_COMMANDS.copy())
+    
+    # User-defined deny patterns (blocked even if fatigue is low)
+    deny_patterns: List[str] = field(default_factory=list)
+    
+    # User-defined allow patterns (only these are allowed in live mode if set)
+    allow_patterns: List[str] = field(default_factory=list)
+    
+    # Webhook URL for safety event notifications (Slack, PagerDuty, etc.)
+    webhook_url: Optional[str] = None
+    
+    # === ORIGINAL SETTINGS (Day 1-2) ===
+    
+    # Stress threshold (0.0-1.0). Above this, user is considered "stressed"
     stress_threshold: float = 0.7
     
-    # Focus threshold for detecting deep work
+    # Focus threshold (0.0-1.0). Above this, user is considered "focused"
     focus_threshold: float = 0.6
     
-    # Analysis interval (seconds between analyses)
-    analysis_interval: float = 5.0
+    # How often to analyze signals (seconds)
+    analysis_interval: int = 30
     
-    # Batch size (keystrokes before analysis)
-    batch_size: int = 20
+    # Batch size for signal processing
+    batch_size: int = 100
     
-    # Data retention (days to keep local data)
+    # How long to keep data (days)
     data_retention_days: int = 7
     
-    # Webhooks for DIY integrations (Linux users, etc.)
-    webhooks: Dict[str, Optional[str]] = field(default_factory=lambda: {
-        "on_focus_start": None,
-        "on_focus_end": None,
-        "on_high_stress": None,
-        "on_state_change": None,
-    })
+    # Webhook configurations for notifications
+    webhooks: Dict[str, Any] = field(default_factory=dict)
     
-    # Focus Shield Pro settings (requires subscription)
-    slack_user_token: Optional[str] = None
+    # === PRO FEATURES ===
+    
+    # Enable macOS Do Not Disturb sync
     enable_macos_dnd: bool = False
+    
+    # Enable dangerous command alerts
     enable_dangerous_command_alerts: bool = True
+    
+    # Slack user token for auto-status
+    slack_user_token: Optional[str] = None
 
 
 def load_config() -> HumsanaConfig:
@@ -77,8 +98,6 @@ def load_config() -> HumsanaConfig:
     config_path = get_config_path()
     
     if not config_path.exists():
-        # Create default config
-        create_default_config()
         return HumsanaConfig()
     
     try:
@@ -86,104 +105,47 @@ def load_config() -> HumsanaConfig:
             data = yaml.safe_load(f) or {}
         
         return HumsanaConfig(
-            dangerous_commands=data.get('dangerous_commands', [
-                "rm -rf",
-                "DROP DATABASE",
-                "DROP TABLE",
-                "DELETE FROM",
-                "git push --force",
-                "git push -f",
-                "kubectl delete",
-                "terraform destroy",
-                "docker system prune",
-                "sudo rm",
-            ]),
+            # Interlock settings
+            execution_mode=data.get('execution_mode', 'dry_run'),
+            fatigue_threshold=data.get('fatigue_threshold', 70),
+            dangerous_commands=data.get('dangerous_commands', DEFAULT_DANGEROUS_COMMANDS.copy()),
+            deny_patterns=data.get('deny_patterns', []),
+            allow_patterns=data.get('allow_patterns', []),
+            webhook_url=data.get('webhook_url'),
+            
+            # Original settings
             stress_threshold=data.get('stress_threshold', 0.7),
             focus_threshold=data.get('focus_threshold', 0.6),
-            analysis_interval=data.get('analysis_interval', 5.0),
-            batch_size=data.get('batch_size', 20),
+            analysis_interval=data.get('analysis_interval', 30),
+            batch_size=data.get('batch_size', 100),
             data_retention_days=data.get('data_retention_days', 7),
             webhooks=data.get('webhooks', {}),
-            slack_user_token=data.get('slack_user_token'),
+            
+            # Pro features
             enable_macos_dnd=data.get('enable_macos_dnd', False),
             enable_dangerous_command_alerts=data.get('enable_dangerous_command_alerts', True),
+            slack_user_token=data.get('slack_user_token'),
         )
-    
     except Exception as e:
         print(f"⚠️ Error loading config: {e}")
         print("Using default configuration.")
         return HumsanaConfig()
 
 
-def create_default_config() -> None:
-    """Create the default config file."""
-    config_dir = Path.home() / ".humsana"
-    config_dir.mkdir(exist_ok=True)
-    
-    config_path = config_dir / "config.yaml"
-    
-    default_config = """# Humsana Configuration
-# Edit this file to customize behavior
-
-# Commands that trigger warnings when you're stressed
-dangerous_commands:
-  - "rm -rf"
-  - "DROP DATABASE"
-  - "DROP TABLE"
-  - "DELETE FROM"
-  - "git push --force"
-  - "git push -f"
-  - "kubectl delete"
-  - "terraform destroy"
-  - "docker system prune"
-  - "sudo rm"
-
-# Thresholds (0.0 to 1.0)
-stress_threshold: 0.7
-focus_threshold: 0.6
-
-# Analysis settings
-analysis_interval: 5.0  # seconds between analyses
-batch_size: 20          # keystrokes before analysis
-
-# Data retention
-data_retention_days: 7
-
-# Webhooks for DIY integrations
-# Set these to HTTP URLs to get notified of events
-webhooks:
-  on_focus_start: null
-  on_focus_end: null
-  on_high_stress: null
-  on_state_change: null
-
-# ===========================================
-# FOCUS SHIELD PRO SETTINGS (requires $10/mo subscription)
-# ===========================================
-
-# Slack integration (get token from: https://api.slack.com/legacy/oauth)
-# slack_user_token: xoxp-your-token-here
-
-# macOS Do Not Disturb sync
-enable_macos_dnd: false
-
-# Dangerous command alerts in Claude
-enable_dangerous_command_alerts: true
-"""
-    
-    with open(config_path, 'w') as f:
-        f.write(default_config)
-    
-    print(f"✅ Created default config at: {config_path}")
-
-
 def save_config(config: HumsanaConfig) -> None:
-    """Save configuration to file."""
+    """Save configuration to ~/.humsana/config.yaml"""
     config_path = get_config_path()
     config_path.parent.mkdir(exist_ok=True)
     
     data = {
+        # Interlock settings
+        'execution_mode': config.execution_mode,
+        'fatigue_threshold': config.fatigue_threshold,
         'dangerous_commands': config.dangerous_commands,
+        'deny_patterns': config.deny_patterns,
+        'allow_patterns': config.allow_patterns,
+        
+        # Original settings
         'stress_threshold': config.stress_threshold,
         'focus_threshold': config.focus_threshold,
         'analysis_interval': config.analysis_interval,
@@ -194,9 +156,69 @@ def save_config(config: HumsanaConfig) -> None:
         'enable_dangerous_command_alerts': config.enable_dangerous_command_alerts,
     }
     
-    # Only save slack token if it exists
+    # Only save optional fields if they exist
+    if config.webhook_url:
+        data['webhook_url'] = config.webhook_url
     if config.slack_user_token:
         data['slack_user_token'] = config.slack_user_token
     
     with open(config_path, 'w') as f:
         yaml.dump(data, f, default_flow_style=False)
+
+
+def get_example_config() -> str:
+    """Return an example config.yaml content."""
+    return """# Humsana Configuration
+# Location: ~/.humsana/config.yaml
+
+# === INTERLOCK SETTINGS ===
+
+# Execution mode:
+#   'dry_run' (default) - Simulates commands, shows what would happen
+#   'live' - Actually executes commands
+execution_mode: dry_run
+
+# Fatigue threshold (0-100)
+# Commands are blocked when fatigue exceeds this
+fatigue_threshold: 70
+
+# Additional dangerous patterns to block
+# deny_patterns:
+#   - "aws ec2 terminate"
+#   - "docker rm -f"
+
+# Allowlist mode (only these patterns allowed in 'live' mode)
+# If empty, all commands are allowed (except dangerous ones)
+# allow_patterns:
+#   - "kubectl"
+#   - "git"
+#   - "docker"
+
+# Webhook for safety notifications (Slack, PagerDuty, etc.)
+
+
+# === ANALYSIS SETTINGS ===
+
+# Stress threshold (0.0-1.0)
+stress_threshold: 0.7
+
+# Focus threshold (0.0-1.0)
+focus_threshold: 0.6
+
+# Analysis interval (seconds)
+analysis_interval: 30
+
+# Data retention (days)
+data_retention_days: 7
+
+# === PRO FEATURES ===
+
+# macOS Do Not Disturb sync
+enable_macos_dnd: false
+
+# Dangerous command alerts
+enable_dangerous_command_alerts: true
+
+# Slack user token for auto-status
+# slack_user_token: xoxp-your-token-here
+"""
