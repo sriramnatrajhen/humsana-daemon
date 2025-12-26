@@ -16,6 +16,13 @@ def get_config_path() -> Path:
     return humsana_dir / "config.yaml"
 
 
+def get_humsana_dir() -> Path:
+    """Get the Humsana data directory."""
+    humsana_dir = Path.home() / ".humsana"
+    humsana_dir.mkdir(exist_ok=True)
+    return humsana_dir
+
+
 # Default dangerous commands that trigger interlock
 DEFAULT_DANGEROUS_COMMANDS = [
     "rm -rf",
@@ -195,7 +202,7 @@ fatigue_threshold: 70
 #   - "docker"
 
 # Webhook for safety notifications (Slack, PagerDuty, etc.)
-
+# webhook_url: https://hooks.slack.com/services/XXX/YYY/ZZZ
 
 # === ANALYSIS SETTINGS ===
 
@@ -222,3 +229,39 @@ enable_dangerous_command_alerts: true
 # Slack user token for auto-status
 # slack_user_token: xoxp-your-token-here
 """
+
+
+def create_default_config() -> None:
+    """Create a default config file if it doesn't exist."""
+    config_path = get_config_path()
+    if not config_path.exists():
+        config_path.parent.mkdir(exist_ok=True)
+        with open(config_path, 'w') as f:
+            f.write(get_example_config())
+        print(f"✅ Created default config at {config_path}")
+
+
+def reset_config() -> None:
+    """Reset config to defaults (overwrites existing)."""
+    config_path = get_config_path()
+    config_path.parent.mkdir(exist_ok=True)
+    with open(config_path, 'w') as f:
+        f.write(get_example_config())
+    print(f"✅ Reset config to defaults at {config_path}")
+
+
+def print_config() -> None:
+    """Print current configuration."""
+    config = load_config()
+    print("\n📋 Current Humsana Configuration:")
+    print(f"   Execution mode: {config.execution_mode}")
+    print(f"   Fatigue threshold: {config.fatigue_threshold}%")
+    print(f"   Dangerous patterns: {len(config.dangerous_commands)} built-in + {len(config.deny_patterns)} custom")
+    print(f"   Stress threshold: {config.stress_threshold}")
+    print(f"   Focus threshold: {config.focus_threshold}")
+    print(f"   Analysis interval: {config.analysis_interval}s")
+    print(f"   Data retention: {config.data_retention_days} days")
+    print(f"   Webhook: {'configured' if config.webhook_url else 'not set'}")
+    print(f"   macOS DND: {'enabled' if config.enable_macos_dnd else 'disabled'}")
+    print(f"   Dangerous command alerts: {'enabled' if config.enable_dangerous_command_alerts else 'disabled'}")
+    print()

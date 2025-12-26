@@ -1,9 +1,12 @@
 setup.py
 humsana/__init__.py
+humsana/activity_tracker.py
 humsana/analyzer.py
+humsana/audit.py
 humsana/cli.py
 humsana/collector.py
 humsana/config.py
+humsana/interlock.py
 humsana/local_db.py
 humsana_daemon.egg-info/PKG-INFO
 humsana_daemon.egg-info/SOURCES.txt
