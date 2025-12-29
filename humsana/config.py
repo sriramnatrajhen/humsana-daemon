@@ -1,13 +1,23 @@
 """
 Humsana - Configuration Management
 Handles ~/.humsana/config.yaml with defaults.
+
+v1.1.0: Added license verification for Pro features
 """
 
+import os
+import json
 import yaml
+import requests
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
+from datetime import datetime, timedelta
 
+
+# ============================================================
+# PATHS
+# ============================================================
 
 def get_config_path() -> Path:
     """Get path to config file."""
@@ -22,6 +32,25 @@ def get_humsana_dir() -> Path:
     humsana_dir.mkdir(exist_ok=True)
     return humsana_dir
 
+
+# NEW: License paths
+def get_license_path() -> Path:
+    """Get path to license file."""
+    return get_humsana_dir() / "license.key"
+
+
+def get_license_cache_path() -> Path:
+    """Get path to license cache file."""
+    return get_humsana_dir() / "license_cache.json"
+
+
+# License API endpoint
+LICENSE_API_URL = os.getenv("HUMSANA_LICENSE_API", "https://api.humsana.com/license/verify")
+
+
+# ============================================================
+# DEFAULT PATTERNS
+# ============================================================
 
 # Default dangerous commands that trigger interlock
 DEFAULT_DANGEROUS_COMMANDS = [
@@ -40,6 +69,120 @@ DEFAULT_DANGEROUS_COMMANDS = [
     "> /dev/sd",
 ]
 
+
+# ============================================================
+# LICENSE VERIFICATION (NEW)
+# ============================================================
+
+@dataclass
+class LicenseInfo:
+    """License information."""
+    valid: bool
+    tier: str  # 'free', 'pro', 'team', 'enterprise'
+    reason: Optional[str] = None
+    expires_at: Optional[str] = None
+    cached: bool = False
+
+
+def verify_license() -> LicenseInfo:
+    """
+    Verify the license key.
+    
+    Flow:
+    1. Check if license file exists
+    2. Check local cache (offline grace period: 7 days)
+    3. Verify with server
+    4. Update cache
+    
+    Returns LicenseInfo with validation status.
+    """
+    license_path = get_license_path()
+    cache_path = get_license_cache_path()
+    
+    # No license file = free tier
+    if not license_path.exists():
+        return LicenseInfo(valid=False, tier="free", reason="No license file")
+    
+    license_key = license_path.read_text().strip()
+    
+    # Invalid format
+    if not license_key or not license_key.startswith("hum_pro_"):
+        return LicenseInfo(valid=False, tier="free", reason="Invalid license format")
+    
+    # Check cache first (offline grace period: 7 days)
+    if cache_path.exists():
+        try:
+            cache = json.loads(cache_path.read_text())
+            verified_at = datetime.fromisoformat(cache["verified_at"])
+            grace_period = timedelta(days=7)
+            
+            if datetime.utcnow() - verified_at < grace_period and cache.get("valid"):
+                return LicenseInfo(
+                    valid=True,
+                    tier=cache.get("tier", "pro"),
+                    expires_at=cache.get("expires_at"),
+                    cached=True
+                )
+        except (json.JSONDecodeError, KeyError, ValueError):
+            pass  # Cache corrupted, will re-verify
+    
+    # Verify with server
+    try:
+        response = requests.post(
+            LICENSE_API_URL,
+            json={"license_key": license_key},
+            timeout=5
+        )
+        
+        if response.ok:
+            data = response.json()
+            
+            # Update cache
+            cache = {
+                "valid": data.get("valid", False),
+                "tier": data.get("tier", "pro"),
+                "verified_at": datetime.utcnow().isoformat(),
+                "expires_at": data.get("expires_at")
+            }
+            cache_path.write_text(json.dumps(cache, indent=2))
+            
+            return LicenseInfo(
+                valid=data.get("valid", False),
+                tier=data.get("tier", "pro"),
+                reason=data.get("reason"),
+                expires_at=data.get("expires_at")
+            )
+    
+    except requests.RequestException:
+        # Network error - check extended cache (30 days for offline)
+        if cache_path.exists():
+            try:
+                cache = json.loads(cache_path.read_text())
+                verified_at = datetime.fromisoformat(cache["verified_at"])
+                extended_grace = timedelta(days=30)
+                
+                if datetime.utcnow() - verified_at < extended_grace and cache.get("valid"):
+                    return LicenseInfo(
+                        valid=True,
+                        tier=cache.get("tier", "pro"),
+                        reason="Offline mode (cached)",
+                        cached=True
+                    )
+            except (json.JSONDecodeError, KeyError, ValueError):
+                pass
+        
+        return LicenseInfo(
+            valid=False,
+            tier="free",
+            reason="Unable to verify (offline)"
+        )
+    
+    return LicenseInfo(valid=False, tier="free", reason="Verification failed")
+
+
+# ============================================================
+# CONFIG DATACLASS (Your existing code)
+# ============================================================
 
 @dataclass
 class HumsanaConfig:
@@ -95,7 +238,38 @@ class HumsanaConfig:
     
     # Slack user token for auto-status
     slack_user_token: Optional[str] = None
+    
+    # === LICENSE (NEW - computed at runtime) ===
+    _license_info: Optional[LicenseInfo] = field(default=None, repr=False)
+    
+    @property
+    def is_pro(self) -> bool:
+        """Check if user has a valid Pro license."""
+        if self._license_info is None:
+            self._license_info = verify_license()
+        return self._license_info.valid
+    
+    @property
+    def license_tier(self) -> str:
+        """Get the current license tier."""
+        if self._license_info is None:
+            self._license_info = verify_license()
+        return self._license_info.tier
+    
+    @property
+    def effective_execution_mode(self) -> str:
+        """
+        Get effective execution mode based on license.
+        Free tier is always dry_run, Pro can use live.
+        """
+        if self.execution_mode == "live" and not self.is_pro:
+            return "dry_run"
+        return self.execution_mode
 
+
+# ============================================================
+# CONFIG LOADING (Your existing code)
+# ============================================================
 
 def load_config() -> HumsanaConfig:
     """
@@ -182,7 +356,7 @@ def get_example_config() -> str:
 
 # Execution mode:
 #   'dry_run' (default) - Simulates commands, shows what would happen
-#   'live' - Actually executes commands
+#   'live' - Actually executes commands (requires Pro license)
 execution_mode: dry_run
 
 # Fatigue threshold (0-100)
@@ -219,6 +393,8 @@ analysis_interval: 30
 data_retention_days: 7
 
 # === PRO FEATURES ===
+# Note: Live mode requires a Pro license ($10/month)
+# Get yours at: https://humsana.com/pro
 
 # macOS Do Not Disturb sync
 enable_macos_dnd: false
@@ -253,8 +429,11 @@ def reset_config() -> None:
 def print_config() -> None:
     """Print current configuration."""
     config = load_config()
+    license_info = verify_license()
+    
     print("\n📋 Current Humsana Configuration:")
     print(f"   Execution mode: {config.execution_mode}")
+    print(f"   Effective mode: {config.effective_execution_mode}")  # NEW
     print(f"   Fatigue threshold: {config.fatigue_threshold}%")
     print(f"   Dangerous patterns: {len(config.dangerous_commands)} built-in + {len(config.deny_patterns)} custom")
     print(f"   Stress threshold: {config.stress_threshold}")
@@ -264,4 +443,40 @@ def print_config() -> None:
     print(f"   Webhook: {'configured' if config.webhook_url else 'not set'}")
     print(f"   macOS DND: {'enabled' if config.enable_macos_dnd else 'disabled'}")
     print(f"   Dangerous command alerts: {'enabled' if config.enable_dangerous_command_alerts else 'disabled'}")
+    print()
+    print(f"🔐 License:")  # NEW
+    print(f"   Tier: {license_info.tier.upper()}")
+    print(f"   Valid: {'✅ Yes' if license_info.valid else '❌ No'}")
+    if license_info.reason:
+        print(f"   Status: {license_info.reason}")
+    if license_info.cached:
+        print(f"   (Using cached verification)")
+    if not license_info.valid:
+        print(f"\n   To activate Pro: https://humsana.com/pro")
+    print()
+
+
+# NEW: Show license status separately
+def show_license_status() -> None:
+    """Display current license status."""
+    info = verify_license()
+    
+    print("\n🔐 LICENSE STATUS")
+    print("=" * 40)
+    print(f"   Tier:    {info.tier.upper()}")
+    print(f"   Valid:   {'✅ Yes' if info.valid else '❌ No'}")
+    
+    if info.reason:
+        print(f"   Status:  {info.reason}")
+    if info.expires_at:
+        print(f"   Expires: {info.expires_at}")
+    if info.cached:
+        print(f"   (Using cached verification)")
+    
+    if not info.valid:
+        print("\n   To activate Pro:")
+        print("   1. Purchase at https://humsana.com/pro")
+        print("   2. Save license key to ~/.humsana/license.key")
+        print("   3. Restart the daemon")
+    
     print()
