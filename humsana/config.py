@@ -45,7 +45,7 @@ def get_license_cache_path() -> Path:
 
 
 # License API endpoint
-LICENSE_API_URL = os.getenv("HUMSANA_LICENSE_API", "https://api.humsana.com/license/verify")
+LICENSE_API_URL = os.getenv("HUMSANA_LICENSE_API", "https://humsana.com/license/verify")
 
 
 # ============================================================
