@@ -1,12 +1,16 @@
 """
-Humsana Daemon - Command Line Interface
+Humsana Daemon - Command Line Interface v2
 Main entry point for the daemon.
+
+v2.0: Integrated NotificationManager for Slack + Webhooks
 
 Usage:
     humsana start     # Start the daemon
     humsana stop      # Stop the daemon
     humsana status    # Show current state
     humsana config    # Open config file
+    humsana test-slack    # Test Slack connection (NEW)
+    humsana test-webhook  # Test webhook (NEW)
 """
 
 import argparse
@@ -21,6 +25,8 @@ from .collector import SignalCollector
 from .analyzer import SignalAnalyzer, AnalysisResult
 from .local_db import LocalDatabase, get_db_path
 from .config import load_config, get_config_path, create_default_config
+from .notifications import NotificationManager  # NEW
+from .auth import authenticate_slack, disconnect_slack, show_auth_status
 
 
 # Global daemon instance for signal handling
@@ -29,7 +35,9 @@ _daemon: Optional['HumsanaDaemon'] = None
 
 class HumsanaDaemon:
     """
-    Main daemon that coordinates collection, analysis, and storage.
+    Main daemon that coordinates collection, analysis, storage, and notifications.
+    
+    v2.0: Added NotificationManager for Slack auto-status and webhooks
     """
     
     def __init__(self):
@@ -37,6 +45,14 @@ class HumsanaDaemon:
         self.db = LocalDatabase()
         self.analyzer = SignalAnalyzer()
         self.collector = SignalCollector(on_signal_batch=self._on_signals)
+        
+        # NEW: Initialize notification manager
+        self.notifier = NotificationManager(
+            slack_user_token=self.config.slack_user_token if self.config.enable_slack_status else None,
+            webhook_url=self.config.webhook_url,
+            webhook_type=self.config.webhook_type,
+            webhook_key=self.config.webhook_key,
+        )
         
         self.session_id: Optional[int] = None
         self._running = False
@@ -53,7 +69,17 @@ class HumsanaDaemon:
         # Store in database
         self.db.store_analysis(result)
         
-        # Check for state change (for webhooks)
+        # NEW: Update notifications (Slack status)
+        self.notifier.update_state(
+            result.state.value,
+            {
+                "stress_level": result.stress_level,
+                "focus_level": result.focus_level,
+                "typing_wpm": result.typing_wpm,
+            }
+        )
+        
+        # Check for state change (for legacy webhooks)
         if self._last_state != result.state.value:
             self._on_state_change(self._last_state, result.state.value)
             self._last_state = result.state.value
@@ -63,7 +89,7 @@ class HumsanaDaemon:
     
     def _on_state_change(self, old_state: Optional[str], new_state: str) -> None:
         """Handle state transitions."""
-        # Call webhook if configured
+        # Call legacy webhook if configured
         webhook_url = self.config.webhooks.get('on_state_change')
         if webhook_url:
             self._call_webhook(webhook_url, {
@@ -84,7 +110,7 @@ class HumsanaDaemon:
                 self._call_webhook(focus_url, {'event': 'focus_end'})
         
         # High stress alert
-        if new_state in ('stressed', 'debugging'):
+        if new_state in ('stressed', 'debugging', 'fatigued'):
             stress_url = self.config.webhooks.get('on_high_stress')
             if stress_url:
                 self._call_webhook(stress_url, {'event': 'high_stress', 'state': new_state})
@@ -106,6 +132,8 @@ class HumsanaDaemon:
             'focused': '\033[96m',    # Cyan
             'stressed': '\033[93m',   # Yellow
             'debugging': '\033[91m',  # Red
+            'fatigued': '\033[95m',   # Magenta (NEW)
+            'adrenaline': '\033[97m', # White/Bold (NEW)
         }
         reset = '\033[0m'
         
@@ -120,12 +148,20 @@ class HumsanaDaemon:
     
     def start(self) -> None:
         """Start the daemon."""
-        print("🚀 Starting Humsana daemon...")
+        print("🚀 Starting Humsana daemon v2.0...")
         print(f"📁 Database: {get_db_path()}")
         print(f"⚙️ Config: {get_config_path()}")
         print("")
         print("🔒 Privacy mode: ONLY timing data collected")
         print("📖 Audit the code: https://github.com/sriramnatrajhen/humsana-daemon")
+        print("")
+        
+        # Show notification status
+        if self.config.slack_user_token and self.config.enable_slack_status:
+            print("📡 Slack auto-status: ENABLED")
+        if self.config.webhook_url:
+            print(f"🔔 Webhook ({self.config.webhook_type}): ENABLED")
+        
         print("")
         print("Press Ctrl+C to stop")
         print("-" * 60)
@@ -150,6 +186,10 @@ class HumsanaDaemon:
         
         self._running = False
         self.collector.stop()
+        
+        # NEW: Clear Slack status on clean shutdown
+        if self.notifier:
+            self.notifier.clear_slack_status()
         
         if self.session_id:
             self.db.end_session(self.session_id)
@@ -192,6 +232,16 @@ def cmd_start(args):
     _daemon = HumsanaDaemon()
     _daemon.start()
 
+def cmd_auth(args):
+    """Handle auth command."""
+    if args.action == 'status':
+        show_auth_status()
+    elif args.action == 'disconnect':
+        disconnect_slack()
+    else:
+        # Default: connect Slack
+        authenticate_slack()
+
 
 def cmd_status(args):
     """Show current status."""
@@ -215,6 +265,8 @@ def cmd_status(args):
         'focused': '\033[96m',
         'stressed': '\033[93m',
         'debugging': '\033[91m',
+        'fatigued': '\033[95m',
+        'adrenaline': '\033[97m',
     }
     reset = '\033[0m'
     color = state_colors.get(state, '')
@@ -269,24 +321,95 @@ def cmd_export(args):
     print(json.dumps(output, indent=2))
 
 
+# NEW: Test Slack connection
+def cmd_test_slack(args):
+    """Test Slack connection."""
+    config = load_config()
+    
+    if not config.slack_user_token:
+        print("❌ No Slack token configured")
+        print("\nTo configure:")
+        print("1. Create a Slack app at https://api.slack.com/apps")
+        print("2. Add 'users.profile:write' scope")
+        print("3. Install to workspace and copy User OAuth Token")
+        print("4. Add to ~/.humsana/config.yaml:")
+        print("   slack_user_token: xoxp-your-token-here")
+        return
+    
+    notifier = NotificationManager(slack_user_token=config.slack_user_token)
+    result = notifier.test_slack_connection()
+    
+    if result.get("ok"):
+        print(f"✅ Slack connected!")
+        print(f"   User: {result.get('user')}")
+        print(f"   Team: {result.get('team')}")
+        
+        # Test setting status
+        print("\n🧪 Testing status update...")
+        notifier._update_slack_status("focused")
+        print("   Set status to '🧠 Deep Focus'")
+        
+        time.sleep(2)
+        
+        notifier.clear_slack_status()
+        print("   Cleared status")
+        print("\n✅ Slack integration working!")
+    else:
+        print(f"❌ Slack connection failed: {result.get('error')}")
+
+
+# NEW: Test webhook
+def cmd_test_webhook(args):
+    """Test webhook connection."""
+    config = load_config()
+    
+    if not config.webhook_url:
+        print("❌ No webhook URL configured")
+        print("\nTo configure, add to ~/.humsana/config.yaml:")
+        print("   webhook_url: https://your-webhook-url")
+        print("   webhook_type: generic  # or 'pagerduty' or 'opsgenie'")
+        print("   webhook_key: your-integration-key  # for PD/OpsGenie")
+        return
+    
+    notifier = NotificationManager(
+        webhook_url=config.webhook_url,
+        webhook_type=config.webhook_type,
+        webhook_key=config.webhook_key,
+    )
+    
+    print(f"🧪 Testing webhook ({config.webhook_type})...")
+    print(f"   URL: {config.webhook_url[:50]}...")
+    
+    success = notifier.test_webhook()
+    
+    if success:
+        print("✅ Webhook test sent successfully!")
+    else:
+        print("❌ Webhook test failed")
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Humsana - AI that reads the room',
+        description='Humsana v2.0 - AI that reads the room',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  humsana start     Start the daemon
-  humsana status    Show current state
-  humsana config    Open config file
-  humsana export    Export state as JSON (for MCP)
+  humsana start           Start the daemon
+  humsana status          Show current state
+  humsana auth            Connect Slack (opens browser, zero friction!)
+  humsana auth status     Show what's connected
+  humsana auth disconnect Remove Slack connection
+  humsana config          Open config file
+  humsana export          Export state as JSON (for MCP)
+  humsana test-slack      Test Slack connection
 
 Privacy:
   🔒 Humsana only collects timing between keystrokes
   🔒 We NEVER capture what you type
   🔒 All data stays local in ~/.humsana/
   
-More info: https://github.com/sriramnatrajhen/humsana-daemon")
+More info: https://github.com/sriramnatrajhen/humsana-daemon
         """
     )
     
@@ -307,6 +430,20 @@ More info: https://github.com/sriramnatrajhen/humsana-daemon")
     # export command (for MCP)
     export_parser = subparsers.add_parser('export', help='Export state as JSON')
     export_parser.set_defaults(func=cmd_export)
+    
+    # NEW: test-slack command
+    test_slack_parser = subparsers.add_parser('test-slack', help='Test Slack connection')
+    test_slack_parser.set_defaults(func=cmd_test_slack)
+    
+    # NEW: test-webhook command
+    test_webhook_parser = subparsers.add_parser('test-webhook', help='Test webhook')
+    test_webhook_parser.set_defaults(func=cmd_test_webhook)
+
+    auth_parser = subparsers.add_parser('auth', help='Connect Slack (zero friction)')
+    auth_parser.add_argument('action', nargs='?', default='connect',
+                             choices=['connect', 'status', 'disconnect'],
+                             help='Auth action (default: connect)')
+    auth_parser.set_defaults(func=cmd_auth)
     
     args = parser.parse_args()
     

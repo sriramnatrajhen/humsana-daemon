@@ -1,6 +1,10 @@
 """
-Humsana Daemon - Signal Analyzer
+Humsana Daemon - Signal Analyzer v2
 Converts raw timing signals into stress/focus/cognitive_load scores.
+
+v2.0 UPGRADE: Adds ADRENALINE and FATIGUED states
+- ADRENALINE: High speed + Low errors = "In the zone" / P0 incident mode
+- FATIGUED: High errors + High cognitive load = Dangerous, should block
 
 The Signal Library (mapping from physics to psychology) is our core IP.
 These thresholds were calibrated through research and testing.
@@ -11,7 +15,6 @@ from typing import List, Optional
 from enum import Enum
 import statistics
 
-# Import from collector (same package)
 from .collector import SignalSnapshot
 
 
@@ -22,6 +25,8 @@ class UserState(Enum):
     FOCUSED = "focused"
     STRESSED = "stressed"
     DEBUGGING = "debugging"  # High stress + high activity
+    FATIGUED = "fatigued"    # High errors, slow/erratic - DANGEROUS
+    ADRENALINE = "adrenaline" # High speed, high accuracy - P0/Flow state
 
 
 @dataclass
@@ -39,7 +44,7 @@ class AnalysisResult:
     confidence: float
     
     # Recommendations for AI
-    response_style: str  # "concise" | "detailed" | "friendly"
+    response_style: str  # "concise" | "detailed" | "friendly" | "protective" | "concise_command_mode"
     avoid_clarifying_questions: bool
     interruptible: bool
     
@@ -53,6 +58,8 @@ class AnalysisResult:
 class SignalAnalyzer:
     """
     Analyzes behavioral signals to infer user state.
+    
+    v2.0: Enhanced state detection with Adrenaline vs Fatigue distinction
     
     THE SIGNAL LIBRARY (our moat):
     These mappings from raw signals to psychological state
@@ -70,6 +77,19 @@ class SignalAnalyzer:
         "sustained_typing": 30,   # Seconds of continuous typing
         "low_variance": 3000,     # Consistent rhythm = flow state
         "no_idle": 5,             # No pause > 5 seconds
+    }
+    
+    # NEW: Adrenaline detection thresholds
+    ADRENALINE_THRESHOLDS = {
+        "min_wpm": 90,            # Must be typing fast
+        "max_backspace": 0.05,   # But with very few errors
+        "min_focus": 0.7,         # And high focus
+    }
+    
+    # NEW: Fatigue detection thresholds
+    FATIGUE_THRESHOLDS = {
+        "min_backspace": 0.15,   # High error rate
+        "min_cognitive_load": 0.8, # High cognitive load
     }
     
     def __init__(self):
@@ -115,13 +135,16 @@ class SignalAnalyzer:
             typing_wpm, backspace_ratio, rhythm_variance
         )
         
-        # Determine state
-        state = self._determine_state(stress_level, focus_level, cognitive_load)
+        # Determine state (v2: with Adrenaline/Fatigue detection)
+        state = self._determine_state(
+            stress_level, focus_level, cognitive_load,
+            typing_wpm, backspace_ratio, idle_seconds
+        )
         
         # Calculate confidence based on signal count
         confidence = min(len(signals) / 100, 1.0)
         
-        # Generate recommendations
+        # Generate recommendations (v2: updated for new states)
         response_style, avoid_questions, interruptible = self._generate_recommendations(
             stress_level, focus_level, state
         )
@@ -184,7 +207,7 @@ class SignalAnalyzer:
         High variance = erratic, stressed, uncertain.
         Low variance = flow state, confident.
         """
-        intervals = [s.interval_ms for s in signals if s.interval_ms > 0]
+        intervals = [s.interval_ms for s in signals if s.interval_ms > 0 and s.interval_ms < 2000]
         
         if len(intervals) < 2:
             return 0.0
@@ -299,9 +322,39 @@ class SignalAnalyzer:
         self,
         stress: float,
         focus: float,
-        cognitive_load: float
+        cognitive_load: float,
+        wpm: float,
+        backspace_ratio: float,
+        idle_seconds: float
     ) -> UserState:
-        """Map scores to a discrete user state."""
+        """
+        Map scores to a discrete user state.
+        
+        v2.0: Added ADRENALINE and FATIGUED detection
+        
+        Key insight from friend:
+        - ADRENALINE: High speed + LOW errors = "In the zone" or P0 mode → DON'T block
+        - FATIGUED: High load + HIGH errors = Sloppy, dangerous → BLOCK
+        """
+        
+        # Check for idle/relaxed first
+        if idle_seconds > 120:
+            return UserState.RELAXED
+        
+        # NEW: ADRENALINE detection (High speed + Low errors + High focus)
+        # This is the "P0 incident" or "Flow state" signature
+        # We should NOT block commands in this state
+        if (wpm > self.ADRENALINE_THRESHOLDS["min_wpm"] and 
+            backspace_ratio < self.ADRENALINE_THRESHOLDS["max_backspace"] and
+            focus > self.ADRENALINE_THRESHOLDS["min_focus"]):
+            return UserState.ADRENALINE
+        
+        # NEW: FATIGUED detection (High load + High errors)
+        # This is the "sloppy, dangerous" signature
+        # We SHOULD block commands in this state
+        if (cognitive_load > self.FATIGUE_THRESHOLDS["min_cognitive_load"] and
+            backspace_ratio > self.FATIGUE_THRESHOLDS["min_backspace"]):
+            return UserState.FATIGUED
         
         # High stress + high activity = debugging
         if stress > 0.7 and cognitive_load > 0.6:
@@ -331,9 +384,21 @@ class SignalAnalyzer:
         """
         Generate recommendations for AI interaction.
         
+        v2.0: Updated for ADRENALINE and FATIGUED states
+        
         Returns:
             (response_style, avoid_clarifying_questions, interruptible)
         """
+        
+        # NEW: Adrenaline mode - user is "in the zone" or handling P0
+        # Be extremely concise, no chatter, just execute
+        if state == UserState.ADRENALINE:
+            return ("concise_command_mode", True, False)
+        
+        # NEW: Fatigued mode - user is making mistakes
+        # Be protective, double-check things, add friction
+        if state == UserState.FATIGUED:
+            return ("protective", True, False)
         
         if state == UserState.DEBUGGING:
             # User is problem-solving under pressure

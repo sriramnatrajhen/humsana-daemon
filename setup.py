@@ -9,7 +9,7 @@ if os.path.exists("README.md"):
 
 setup(
     name="humsana-daemon",
-    version="1.0.0",
+    version="2.0.0",
     author="Humsana",
     author_email="ram.natrajhen@gmail.com",
     description="Local behavioral signal collection for Humsana Cognitive Security",

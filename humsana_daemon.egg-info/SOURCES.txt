@@ -8,6 +8,7 @@ humsana/collector.py
 humsana/config.py
 humsana/interlock.py
 humsana/local_db.py
+humsana/notifications.py
 humsana_daemon.egg-info/PKG-INFO
 humsana_daemon.egg-info/SOURCES.txt
 humsana_daemon.egg-info/dependency_links.txt

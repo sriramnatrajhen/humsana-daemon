@@ -2,7 +2,7 @@
 Humsana - Configuration Management
 Handles ~/.humsana/config.yaml with defaults.
 
-v1.1.0: Added license verification for Pro features
+v2.0.0: Added webhook_type, webhook_key for PagerDuty/OpsGenie support
 """
 
 import os
@@ -33,7 +33,6 @@ def get_humsana_dir() -> Path:
     return humsana_dir
 
 
-# NEW: License paths
 def get_license_path() -> Path:
     """Get path to license file."""
     return get_humsana_dir() / "license.key"
@@ -52,7 +51,6 @@ LICENSE_API_URL = os.getenv("HUMSANA_LICENSE_API", "https://humsana.com/license/
 # DEFAULT PATTERNS
 # ============================================================
 
-# Default dangerous commands that trigger interlock
 DEFAULT_DANGEROUS_COMMANDS = [
     "rm -rf",
     "DROP DATABASE",
@@ -71,7 +69,7 @@ DEFAULT_DANGEROUS_COMMANDS = [
 
 
 # ============================================================
-# LICENSE VERIFICATION (NEW)
+# LICENSE VERIFICATION
 # ============================================================
 
 @dataclass
@@ -85,27 +83,15 @@ class LicenseInfo:
 
 
 def verify_license() -> LicenseInfo:
-    """
-    Verify the license key.
-    
-    Flow:
-    1. Check if license file exists
-    2. Check local cache (offline grace period: 7 days)
-    3. Verify with server
-    4. Update cache
-    
-    Returns LicenseInfo with validation status.
-    """
+    """Verify the license key."""
     license_path = get_license_path()
     cache_path = get_license_cache_path()
     
-    # No license file = free tier
     if not license_path.exists():
         return LicenseInfo(valid=False, tier="free", reason="No license file")
     
     license_key = license_path.read_text().strip()
     
-    # Invalid format
     if not license_key or not license_key.startswith("hum_pro_"):
         return LicenseInfo(valid=False, tier="free", reason="Invalid license format")
     
@@ -124,7 +110,7 @@ def verify_license() -> LicenseInfo:
                     cached=True
                 )
         except (json.JSONDecodeError, KeyError, ValueError):
-            pass  # Cache corrupted, will re-verify
+            pass
     
     # Verify with server
     try:
@@ -137,7 +123,6 @@ def verify_license() -> LicenseInfo:
         if response.ok:
             data = response.json()
             
-            # Update cache
             cache = {
                 "valid": data.get("valid", False),
                 "tier": data.get("tier", "pro"),
@@ -154,7 +139,7 @@ def verify_license() -> LicenseInfo:
             )
     
     except requests.RequestException:
-        # Network error - check extended cache (30 days for offline)
+        # Extended offline grace (30 days)
         if cache_path.exists():
             try:
                 cache = json.loads(cache_path.read_text())
@@ -171,75 +156,49 @@ def verify_license() -> LicenseInfo:
             except (json.JSONDecodeError, KeyError, ValueError):
                 pass
         
-        return LicenseInfo(
-            valid=False,
-            tier="free",
-            reason="Unable to verify (offline)"
-        )
+        return LicenseInfo(valid=False, tier="free", reason="Unable to verify (offline)")
     
     return LicenseInfo(valid=False, tier="free", reason="Verification failed")
 
 
 # ============================================================
-# CONFIG DATACLASS (Your existing code)
+# CONFIG DATACLASS
 # ============================================================
 
 @dataclass
 class HumsanaConfig:
     """Configuration settings for Humsana."""
     
-    # === INTERLOCK SETTINGS (Day 3) ===
-    
-    # Execution mode: 'dry_run' (default, simulates) or 'live' (actually executes)
+    # === INTERLOCK SETTINGS ===
     execution_mode: str = 'dry_run'
-    
-    # Fatigue threshold (0-100). Above this, dangerous commands are blocked.
     fatigue_threshold: int = 70
-    
-    # Built-in dangerous command patterns
     dangerous_commands: List[str] = field(default_factory=lambda: DEFAULT_DANGEROUS_COMMANDS.copy())
-    
-    # User-defined deny patterns (blocked even if fatigue is low)
     deny_patterns: List[str] = field(default_factory=list)
-    
-    # User-defined allow patterns (only these are allowed in live mode if set)
     allow_patterns: List[str] = field(default_factory=list)
     
-    # Webhook URL for safety event notifications (Slack, PagerDuty, etc.)
+    # === WEBHOOK SETTINGS (v2.0) ===
     webhook_url: Optional[str] = None
+    webhook_type: str = "generic"  # "generic" | "pagerduty" | "opsgenie"
+    webhook_key: Optional[str] = None  # Integration key for PD/OpsGenie
     
-    # === ORIGINAL SETTINGS (Day 1-2) ===
+    # === SLACK SETTINGS (v2.0) ===
+    slack_user_token: Optional[str] = None
+    slack_status_expiration_minutes: int = 60  # Auto-clear after this many minutes
     
-    # Stress threshold (0.0-1.0). Above this, user is considered "stressed"
+    # === ANALYSIS SETTINGS ===
     stress_threshold: float = 0.7
-    
-    # Focus threshold (0.0-1.0). Above this, user is considered "focused"
     focus_threshold: float = 0.6
-    
-    # How often to analyze signals (seconds)
     analysis_interval: int = 30
-    
-    # Batch size for signal processing
     batch_size: int = 100
-    
-    # How long to keep data (days)
     data_retention_days: int = 7
-    
-    # Webhook configurations for notifications
     webhooks: Dict[str, Any] = field(default_factory=dict)
     
     # === PRO FEATURES ===
-    
-    # Enable macOS Do Not Disturb sync
     enable_macos_dnd: bool = False
-    
-    # Enable dangerous command alerts
     enable_dangerous_command_alerts: bool = True
+    enable_slack_status: bool = True  # NEW: Toggle for Slack auto-status
     
-    # Slack user token for auto-status
-    slack_user_token: Optional[str] = None
-    
-    # === LICENSE (NEW - computed at runtime) ===
+    # === LICENSE (computed at runtime) ===
     _license_info: Optional[LicenseInfo] = field(default=None, repr=False)
     
     @property
@@ -258,24 +217,18 @@ class HumsanaConfig:
     
     @property
     def effective_execution_mode(self) -> str:
-        """
-        Get effective execution mode based on license.
-        Free tier is always dry_run, Pro can use live.
-        """
+        """Get effective execution mode based on license."""
         if self.execution_mode == "live" and not self.is_pro:
             return "dry_run"
         return self.execution_mode
 
 
 # ============================================================
-# CONFIG LOADING (Your existing code)
+# CONFIG LOADING
 # ============================================================
 
 def load_config() -> HumsanaConfig:
-    """
-    Load configuration from ~/.humsana/config.yaml
-    Falls back to defaults if file doesn't exist.
-    """
+    """Load configuration from ~/.humsana/config.yaml"""
     config_path = get_config_path()
     
     if not config_path.exists():
@@ -292,7 +245,16 @@ def load_config() -> HumsanaConfig:
             dangerous_commands=data.get('dangerous_commands', DEFAULT_DANGEROUS_COMMANDS.copy()),
             deny_patterns=data.get('deny_patterns', []),
             allow_patterns=data.get('allow_patterns', []),
+            
+            # Webhook settings (v2.0)
             webhook_url=data.get('webhook_url'),
+            webhook_type=data.get('webhook_type', 'generic'),
+            webhook_key=data.get('webhook_key'),
+            
+            # Slack settings (v2.0)
+            slack_user_token=data.get('slack_user_token'),
+            slack_status_expiration_minutes=data.get('slack_status_expiration_minutes', 60),
+            enable_slack_status=data.get('enable_slack_status', True),
             
             # Original settings
             stress_threshold=data.get('stress_threshold', 0.7),
@@ -305,7 +267,6 @@ def load_config() -> HumsanaConfig:
             # Pro features
             enable_macos_dnd=data.get('enable_macos_dnd', False),
             enable_dangerous_command_alerts=data.get('enable_dangerous_command_alerts', True),
-            slack_user_token=data.get('slack_user_token'),
         )
     except Exception as e:
         print(f"⚠️ Error loading config: {e}")
@@ -326,6 +287,13 @@ def save_config(config: HumsanaConfig) -> None:
         'deny_patterns': config.deny_patterns,
         'allow_patterns': config.allow_patterns,
         
+        # Webhook settings
+        'webhook_type': config.webhook_type,
+        
+        # Slack settings
+        'slack_status_expiration_minutes': config.slack_status_expiration_minutes,
+        'enable_slack_status': config.enable_slack_status,
+        
         # Original settings
         'stress_threshold': config.stress_threshold,
         'focus_threshold': config.focus_threshold,
@@ -340,6 +308,8 @@ def save_config(config: HumsanaConfig) -> None:
     # Only save optional fields if they exist
     if config.webhook_url:
         data['webhook_url'] = config.webhook_url
+    if config.webhook_key:
+        data['webhook_key'] = config.webhook_key
     if config.slack_user_token:
         data['slack_user_token'] = config.slack_user_token
     
@@ -349,7 +319,7 @@ def save_config(config: HumsanaConfig) -> None:
 
 def get_example_config() -> str:
     """Return an example config.yaml content."""
-    return """# Humsana Configuration
+    return """# Humsana Configuration v2.0
 # Location: ~/.humsana/config.yaml
 
 # === INTERLOCK SETTINGS ===
@@ -368,15 +338,29 @@ fatigue_threshold: 70
 #   - "aws ec2 terminate"
 #   - "docker rm -f"
 
-# Allowlist mode (only these patterns allowed in 'live' mode)
-# If empty, all commands are allowed (except dangerous ones)
-# allow_patterns:
-#   - "kubectl"
-#   - "git"
-#   - "docker"
+# === NOTIFICATION SETTINGS (PRO) ===
 
-# Webhook for safety notifications (Slack, PagerDuty, etc.)
-# webhook_url: https://hooks.slack.com/services/XXX/YYY/ZZZ
+# Slack Auto-Status
+# Updates your Slack status based on your state
+# Get your User Token (xoxp-...) from: https://api.slack.com/apps
+# slack_user_token: xoxp-your-token-here
+
+# Enable/disable Slack status updates
+enable_slack_status: true
+
+# Status auto-clears after this many minutes (safety net)
+slack_status_expiration_minutes: 60
+
+# === WEBHOOK SETTINGS (PRO) ===
+
+# Webhook for safety event notifications
+# webhook_url: https://events.pagerduty.com/v2/enqueue
+
+# Webhook type: generic | pagerduty | opsgenie
+# webhook_type: pagerduty
+
+# Integration key for PagerDuty/OpsGenie
+# webhook_key: your-integration-key
 
 # === ANALYSIS SETTINGS ===
 
@@ -401,9 +385,6 @@ enable_macos_dnd: false
 
 # Dangerous command alerts
 enable_dangerous_command_alerts: true
-
-# Slack user token for auto-status
-# slack_user_token: xoxp-your-token-here
 """
 
 
@@ -433,30 +414,26 @@ def print_config() -> None:
     
     print("\n📋 Current Humsana Configuration:")
     print(f"   Execution mode: {config.execution_mode}")
-    print(f"   Effective mode: {config.effective_execution_mode}")  # NEW
+    print(f"   Effective mode: {config.effective_execution_mode}")
     print(f"   Fatigue threshold: {config.fatigue_threshold}%")
     print(f"   Dangerous patterns: {len(config.dangerous_commands)} built-in + {len(config.deny_patterns)} custom")
-    print(f"   Stress threshold: {config.stress_threshold}")
-    print(f"   Focus threshold: {config.focus_threshold}")
-    print(f"   Analysis interval: {config.analysis_interval}s")
-    print(f"   Data retention: {config.data_retention_days} days")
-    print(f"   Webhook: {'configured' if config.webhook_url else 'not set'}")
-    print(f"   macOS DND: {'enabled' if config.enable_macos_dnd else 'disabled'}")
-    print(f"   Dangerous command alerts: {'enabled' if config.enable_dangerous_command_alerts else 'disabled'}")
     print()
-    print(f"🔐 License:")  # NEW
+    print("📡 Notifications:")
+    print(f"   Slack: {'configured' if config.slack_user_token else 'not set'}")
+    print(f"   Webhook: {'configured' if config.webhook_url else 'not set'}")
+    if config.webhook_url:
+        print(f"   Webhook type: {config.webhook_type}")
+    print()
+    print(f"🔐 License:")
     print(f"   Tier: {license_info.tier.upper()}")
     print(f"   Valid: {'✅ Yes' if license_info.valid else '❌ No'}")
     if license_info.reason:
         print(f"   Status: {license_info.reason}")
-    if license_info.cached:
-        print(f"   (Using cached verification)")
     if not license_info.valid:
         print(f"\n   To activate Pro: https://humsana.com/pro")
     print()
 
 
-# NEW: Show license status separately
 def show_license_status() -> None:
     """Display current license status."""
     info = verify_license()
